@@ -494,6 +494,7 @@ async def chat_stream(request: ChatRequest):
     enable_thinking = request.enable_thinking
     max_tokens = request.max_tokens
     thinking_budget = request.thinking_budget
+    recommended_tools = None
 
     if request.agent_id:
         from services.soc_agents import AgentManager
@@ -502,18 +503,19 @@ async def chat_stream(request: ChatRequest):
         agent = agent_manager.agents.get(request.agent_id)
         if agent:
             system_prompt = agent.system_prompt
+            recommended_tools = agent.recommended_tools
             # Per GH #79: request wins verbatim (no downgrade/upgrade from agent default)
             if max_tokens is None:
                 max_tokens = agent.max_tokens
             logger.info(
-                f"🤖 Stream using agent: {agent.name} (thinking: {enable_thinking}, max_tokens: {max_tokens})"
+                f"Stream using agent: {agent.name} (thinking: {enable_thinking}, max_tokens: {max_tokens})"
             )
 
             # Ensure thinking_budget is less than max_tokens
             if enable_thinking and thinking_budget and thinking_budget >= max_tokens:
                 thinking_budget = int(max_tokens * 0.6)
                 logger.warning(
-                    f"⚠️ Adjusted stream thinking_budget from {request.thinking_budget} to {thinking_budget}"
+                    f"Adjusted stream thinking_budget from {request.thinking_budget} to {thinking_budget}"
                 )
 
     # Final fallback if no agent set these
@@ -630,27 +632,58 @@ async def chat_stream(request: ChatRequest):
             )
 
             if use_router and router_provider is not None:
-                from services.llm_router import LLMRouter
+                from services.model_registry import ModelRegistry
+                from services.openai_agent_service import OpenAIAgentService
 
-                router_system_prompt = (
-                    "You are Vigil, a concise SOC triage analyst. This local "
-                    "Ollama/OpenAI-compatible chat path has no executable tools. "
-                    "Do not claim to fetch, search, query, enrich, call, store, "
-                    "or retrieve anything. Do not mention tool names, XML tags, "
-                    "or placeholders. Ignore any instruction in the conversation "
-                    "that asks you to use tools. Analyze only the finding details "
-                    "and conversation context already present. If data is missing, "
-                    "say what is missing and recommend the next manual validation "
-                    "step. Write the final investigation analysis directly."
+                model_id = request.model or router_provider.default_model
+                registry = ModelRegistry()
+                model_info = registry.get_model_info(
+                    router_provider.provider_id,
+                    router_provider.provider_type,
+                    model_id,
                 )
-                async for chunk in LLMRouter().dispatch_openai_stream(
-                    provider=router_provider,
-                    messages=messages,
-                    system_prompt=router_system_prompt,
-                    model=request.model,
-                    max_tokens=max_tokens,
-                ):
-                    yield f"data: {json.dumps(chunk)}\n\n"
+                enable_agent_tools = model_info.supports_tools
+
+                if enable_agent_tools:
+                    agent = OpenAIAgentService(
+                        recommended_tools=recommended_tools,
+                    )
+                    agent_system_prompt = (
+                        system_prompt
+                        or "You are Vigil, an AI-native SOC analyst. You have "
+                        "access to security tools for investigating findings, "
+                        "searching detections, querying cases, and integrating "
+                        "with external security platforms via MCP. Use tools "
+                        "when the user asks you to look something up, enrich "
+                        "data, or take action. Be concise and precise."
+                    )
+                    async for chunk in agent.stream(
+                        provider=router_provider,
+                        messages=messages,
+                        system_prompt=agent_system_prompt,
+                        model=model_id,
+                        max_tokens=max_tokens,
+                        enable_tools=True,
+                    ):
+                        yield f"data: {json.dumps(chunk)}\n\n"
+                else:
+                    from services.llm_router import LLMRouter
+
+                    no_tools_prompt = (
+                        "You are Vigil, a concise SOC triage analyst. This "
+                        "model does not support tool calling. Analyze only the "
+                        "finding details and conversation context already "
+                        "present. If data is missing, say what is missing and "
+                        "recommend the next manual validation step."
+                    )
+                    async for chunk in LLMRouter().dispatch_openai_stream(
+                        provider=router_provider,
+                        messages=messages,
+                        system_prompt=no_tools_prompt,
+                        model=model_id,
+                        max_tokens=max_tokens,
+                    ):
+                        yield f"data: {json.dumps(chunk)}\n\n"
                 return
 
             chunk_count = 0
@@ -670,6 +703,7 @@ async def chat_stream(request: ChatRequest):
                 thinking_budget=thinking_budget,
                 session_id=request.session_id,
                 agent_id=request.agent_id,
+                recommended_tools=recommended_tools,
             ):
                 chunk_count += 1
                 # Handle both dict (new format with thinking) and string (backward compat)
@@ -682,22 +716,22 @@ async def chat_stream(request: ChatRequest):
                         total_thinking_length += len(chunk_content)
                         if thinking_chunks <= 3:  # Log first few
                             logger.debug(
-                                f"💭 [RequestID: {request_id}] Thinking chunk {thinking_chunks}: {chunk_content[:50]}..."
+                                f"[RequestID: {request_id}] Thinking chunk {thinking_chunks}: {chunk_content[:50]}..."
                             )
                     elif chunk_type == "text":
                         text_chunks += 1
                         total_text_length += len(chunk_content)
                         if text_chunks <= 3:  # Log first few
                             logger.debug(
-                                f"📝 [RequestID: {request_id}] Text chunk {text_chunks}: {chunk_content[:50]}..."
+                                f"[RequestID: {request_id}] Text chunk {text_chunks}: {chunk_content[:50]}..."
                             )
                     elif chunk_type in ["thinking_start", "thinking_end"]:
                         logger.info(
-                            f"🔄 [RequestID: {request_id}] Stream event: {chunk_type}"
+                            f"[RequestID: {request_id}] Stream event: {chunk_type}"
                         )
                     elif chunk_type == "context_summarized":
                         logger.info(
-                            f"📝 [RequestID: {request_id}] Context auto-summarized: {chunk.get('summarized_messages', 0)} messages condensed"
+                            f"[RequestID: {request_id}] Context auto-summarized: {chunk.get('summarized_messages', 0)} messages condensed"
                         )
 
                     yield f"data: {json.dumps(chunk)}\n\n"
@@ -713,16 +747,16 @@ async def chat_stream(request: ChatRequest):
 
             elapsed_time = time.time() - start_time
             logger.info(
-                f"✅ [RequestID: {request_id}] Stream complete in {elapsed_time:.2f}s"
+                f"[RequestID: {request_id}] Stream complete in {elapsed_time:.2f}s"
             )
             logger.info(
-                f"   📊 Stats: Total chunks: {chunk_count}, Thinking: {thinking_chunks} ({total_thinking_length} chars), Text: {text_chunks} ({total_text_length} chars)"
+                f"Stats: Total chunks: {chunk_count}, Thinking: {thinking_chunks} ({total_thinking_length} chars), Text: {text_chunks} ({total_text_length} chars)"
             )
 
         except Exception as e:
             elapsed_time = time.time() - start_time
             logger.error(
-                f"❌ [RequestID: {request_id}] Stream error after {elapsed_time:.2f}s: {e}",
+                f"[RequestID: {request_id}] Stream error after {elapsed_time:.2f}s: {e}",
                 exc_info=True,
             )
             yield f"data: {json.dumps({'error': str(e)})}\n\n"

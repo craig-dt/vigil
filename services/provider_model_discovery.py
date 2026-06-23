@@ -326,6 +326,85 @@ def _ollama_context_from_show(show_payload: Dict[str, Any]) -> int:
     return 0
 
 
+# Ollama model families known to support OpenAI-style tool calling.
+# Derived from Ollama docs and empirical testing. The model name (or its
+# architecture family from /api/show) is matched case-insensitively.
+_OLLAMA_TOOL_CAPABLE_FAMILIES = frozenset((
+    "llama3.1", "llama3.2", "llama3.3", "llama4",
+    "qwen2.5", "qwen3", "qwq",
+    "mistral", "mixtral", "mistral-nemo", "mistral-small", "mistral-large",
+    "command-r", "command-r-plus",
+    "deepseek-r1", "deepseek-v2", "deepseek-v3", "deepseek-coder-v2",
+    "nemotron",
+    "granite3",
+    "phi4",
+    "glm4", "glm-4",
+    "hermes3",
+    "athene",
+    "firefunction",
+))
+
+_OLLAMA_VISION_CAPABLE_FAMILIES = frozenset((
+    "llava", "llava-llama3", "llava-phi3",
+    "llama3.2-vision",
+    "moondream",
+    "bakllava",
+    "minicpm-v",
+))
+
+
+def _ollama_capabilities_from_show(
+    model_name: str, show_payload: Dict[str, Any]
+) -> Dict[str, bool]:
+    """Infer model capabilities from Ollama /api/show metadata.
+
+    Uses the model_info architecture family and the model name to determine
+    tool calling and vision support. Falls back to name-prefix heuristics
+    when model_info is unavailable.
+    """
+    name_lower = model_name.lower().split(":")[0]
+    info = show_payload.get("model_info") or {}
+
+    # Check architecture family from model_info keys
+    families_in_info = set()
+    for key in info:
+        parts = key.split(".")
+        if parts:
+            families_in_info.add(parts[0].lower())
+
+    supports_tools = False
+    supports_vision = False
+
+    # Tool support: check name prefixes against known families
+    for family in _OLLAMA_TOOL_CAPABLE_FAMILIES:
+        if name_lower.startswith(family) or name_lower == family:
+            supports_tools = True
+            break
+
+    # Also check if the architecture family matches
+    if not supports_tools:
+        for arch_family in families_in_info:
+            for known in _OLLAMA_TOOL_CAPABLE_FAMILIES:
+                if arch_family.startswith(known.replace("-", "").replace(".", "")):
+                    supports_tools = True
+                    break
+            if supports_tools:
+                break
+
+    # Vision support
+    for family in _OLLAMA_VISION_CAPABLE_FAMILIES:
+        if name_lower.startswith(family) or name_lower == family:
+            supports_vision = True
+            break
+
+    # Ollama models don't have native extended thinking in the Anthropic sense
+    return {
+        "supports_tools": supports_tools,
+        "supports_thinking": False,
+        "supports_vision": supports_vision,
+    }
+
+
 async def fetch_ollama_models(
     base_url: Optional[str] = None,
     *,
@@ -400,11 +479,17 @@ async def fetch_ollama_models(
             # unit tests using minimal stubs don't have to mock it.
             if len(getattr(resp, "content", b"") or b"") > _MAX_RESPONSE_BYTES:
                 raise RuntimeError("upstream response exceeded size cap")
-            ctx = _ollama_context_from_show(resp.json())
+            payload = resp.json()
+            ctx = _ollama_context_from_show(payload)
+            caps = _ollama_capabilities_from_show(name, payload)
         except Exception as exc:  # noqa: BLE001
             logger.debug("ollama /api/show %s failed: %s", name, exc)
             ctx = 0
-        return ModelMeta(id=name, display_name=name, context_window=ctx)
+            caps = _ollama_capabilities_from_show(name, {})
+        return ModelMeta(
+            id=name, display_name=name,
+            context_window=ctx, capabilities=caps,
+        )
 
     async with httpx.AsyncClient(timeout=10.0, follow_redirects=False) as client:
         models = await asyncio.gather(*(_show(client, n) for n in names))

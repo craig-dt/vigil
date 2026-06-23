@@ -3223,7 +3223,8 @@ Provide a structured summary preserving all critical context."""
                 logger.debug(f"🔧 Stream with {len(tools)} MCP tools")
             if thinking_config:
                 api_kwargs["thinking"] = thinking_config
-                logger.info(f"💭 Stream thinking config: {thinking_config}")
+                logger.info(f"Stream thinking config: {thinking_config}")
+            self._apply_prompt_cache_controls(api_kwargs)
 
             # Stream with proper tool use handling using streaming API throughout
             max_iterations = 30  # Allow more iterations for complex workflows
@@ -3427,8 +3428,16 @@ Provide a structured summary preserving all critical context."""
                     logger.debug(f"Reasoning-trace persist skipped (stream): {_pe}")
 
                 # Check if tool use is needed
+                if stop_reason == "refusal":
+                    logger.warning("Claude refused to respond (stream)")
+                    yield {
+                        "type": "text",
+                        "content": "\n\nI cannot assist with that request.",
+                    }
+                    break
+
                 if stop_reason == "tool_use" and accumulated_content:
-                    logger.info(f"🔧 Tool use in stream - processing...")
+                    logger.info(f"Tool use in stream - processing...")
 
                     # Check for infinite loop detection
                     current_tool_calls = []
@@ -3465,7 +3474,7 @@ Provide a structured summary preserving all critical context."""
                         accumulated_content
                     )
                     logger.info(
-                        f"✅ Tool processing complete in stream - {len(tool_results)} results"
+                        f"Tool processing complete in stream - {len(tool_results)} results"
                     )
 
                     # Add assistant message and tool results to conversation.
@@ -3484,14 +3493,24 @@ Provide a structured summary preserving all critical context."""
 
                     # Update api_kwargs for next iteration with tool results
                     api_kwargs["messages"] = messages
+                    self._apply_prompt_cache_controls(api_kwargs)
                 else:
                     # Done - no more tool use needed
                     total_elapsed = asyncio.get_event_loop().time() - start_time
                     total_delay = sum(iteration_delays)
                     logger.info(
-                        f"✅ Stream complete after {iteration} iteration(s) in {total_elapsed:.1f}s (rate limiting: {total_delay:.1f}s)"
+                        f"Stream complete after {iteration} iteration(s) in {total_elapsed:.1f}s (rate limiting: {total_delay:.1f}s)"
                     )
                     break
+            else:
+                # while loop exhausted without break (all iterations used tool_use)
+                logger.warning(
+                    f"Tool iteration limit ({max_iterations}) exhausted"
+                )
+                yield {
+                    "type": "text",
+                    "content": "\n\n[Tool iteration limit reached. Stopping.]",
+                }
 
         except Exception as e:
             logger.error(f"Error in Claude chat stream: {e}")

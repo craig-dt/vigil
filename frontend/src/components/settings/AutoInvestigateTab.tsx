@@ -66,8 +66,8 @@ const DEFAULTS: OrchestratorConfig = {
   stale_threshold: 300,
   dedup_window_minutes: 30,
   context_max_chars: 10000,
-  plan_model: 'claude-sonnet-4-5-20250929',
-  review_model: 'claude-sonnet-4-5-20250929',
+  plan_model: '',
+  review_model: '',
   workdir_base: 'data/investigations',
 }
 

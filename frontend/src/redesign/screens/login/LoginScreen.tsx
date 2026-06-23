@@ -95,10 +95,10 @@ function LoginInner() {
           </div>
 
           <div className="brand-body">
-            <h1>Security operations, under one calm pane of glass.</h1>
+            <h1>Vigilant, Open, Trustworthy.</h1>
             <p>
-              Triage findings, correlate signals across your estate, and let Vigil
-              surface what actually needs an analyst — before it becomes an incident.
+            Open source and community built, 
+            Vigil stands watch beside your analysts on the journey toward greater autonomy.
             </p>
           </div>
         </section>
@@ -128,7 +128,7 @@ function LoginInner() {
                   <div className="field">
                     <label htmlFor="auth-user">Username or email</label>
                     <div className="ctrl">
-                      <Icon name="name" className="lead" />
+                      <Icon name="person" className="lead" />
                       <input
                         id="auth-user"
                         name="username"
