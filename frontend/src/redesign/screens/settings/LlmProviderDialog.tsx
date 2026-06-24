@@ -3,7 +3,7 @@
    here) → model & save. Draft-upsert so /test and /models can run before the
    final save; retries update the draft row rather than re-POSTing (avoids 409).
    ============================================================ */
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Icon } from '../../shared/icons'
 import { Field, Popup, PasswordInput, Select, TextInput, Toggle } from '../../shared/ui'
 import { Banner, extractApiError } from '../../shared/formKit'
@@ -72,6 +72,16 @@ export const LlmProviderWizard = ({
   const [availableModels, setAvailableModels] = useState<string[]>([])
   const [saveError, setSaveError] = useState<string | null>(null)
 
+  // Pre-test model discovery: fetch the provider's model list *before* the
+  // connection test (parity with the classic ProviderConfigSteps dialog) so
+  // the user can pick a real model in step 1 instead of typing one blind.
+  const [discoveredModels, setDiscoveredModels] = useState<string[]>([])
+  const [discovering, setDiscovering] = useState(false)
+  const [discoverError, setDiscoverError] = useState<string | null>(null)
+  const [useCustomModel, setUseCustomModel] = useState(false)
+  const discoverDebounce = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const modelOptions = discoveredModels.map((m) => ({ value: m, label: m }))
+
   // A connection-affecting edit (or a provider-type switch) invalidates a prior
   // successful test, so the model picker / Save hide and a re-test is required.
   const invalidateTest = () => {
@@ -81,6 +91,45 @@ export const LlmProviderWizard = ({
       setAvailableModels([])
     }
   }
+
+  const runDiscovery = async () => {
+    setDiscovering(true)
+    setDiscoverError(null)
+    try {
+      const res = await llmProviderApi.discoverModels({
+        provider_type: providerType,
+        base_url: baseUrl || undefined,
+        api_key: apiKey || undefined,
+        organization: organization || undefined,
+      })
+      const ids = res.data.models || []
+      setDiscoveredModels(ids)
+      // Auto-pick the first model only if the user hasn't chosen one; if their
+      // current choice isn't offered, drop to the free-text field so it stays visible.
+      if (!defaultModel && ids.length > 0) setDefaultModel(ids[0])
+      if (defaultModel && ids.length > 0 && !ids.includes(defaultModel)) setUseCustomModel(true)
+    } catch (e) {
+      setDiscoverError(extractApiError(e, 'Failed to list models'))
+      setDiscoveredModels([])
+    } finally {
+      setDiscovering(false)
+    }
+  }
+
+  // Auto-discover on step 1 once we have enough info (debounced so typing the
+  // API key doesn't fire a request per keystroke).
+  useEffect(() => {
+    if (step !== 1) return
+    const needsKey = providerType === 'openai' || providerType === 'anthropic'
+    if (needsKey && !apiKey && !editing) return
+    if (providerType === 'ollama' && !baseUrl) return
+    if (discoverDebounce.current) clearTimeout(discoverDebounce.current)
+    discoverDebounce.current = setTimeout(runDiscovery, 500)
+    return () => {
+      if (discoverDebounce.current) clearTimeout(discoverDebounce.current)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [step, providerType, baseUrl, apiKey, organization])
 
   const selectProviderType = (t: ProviderType) => {
     if (t === providerType) return
@@ -92,6 +141,9 @@ export const LlmProviderWizard = ({
     setDefaultModel(DEFAULT_MODEL[t])
     setApiKey('')
     setOrganization('')
+    setDiscoveredModels([])
+    setUseCustomModel(false)
+    setDiscoverError(null)
     invalidateTest()
   }
 
@@ -243,6 +295,50 @@ export const LlmProviderWizard = ({
                 }}
               />
             </Field>
+          )}
+
+          <Field
+            label="Default model"
+            error={discoverError ? `Model discovery failed — enter a model ID manually. (${discoverError})` : undefined}
+            hint={
+              discovering
+                ? 'Fetching available models…'
+                : discoveredModels.length && !useCustomModel
+                  ? `${discoveredModels.length} model(s) available from this provider.`
+                  : 'Enter the model ID, or click refresh to fetch a list from the provider.'
+            }
+          >
+            <div className="flex items-start gap-2">
+              <div className="flex-1">
+                {discoveredModels.length > 0 && !useCustomModel ? (
+                  <Select
+                    value={discoveredModels.includes(defaultModel) ? defaultModel : ''}
+                    placeholder="Select a model"
+                    options={[...modelOptions, { value: '__custom__', label: 'Custom model ID…' }]}
+                    onSelect={(v) => (v === '__custom__' ? setUseCustomModel(true) : setDefaultModel(v))}
+                  />
+                ) : (
+                  <TextInput
+                    value={defaultModel}
+                    placeholder={DEFAULT_MODEL[providerType]}
+                    onChange={(e) => setDefaultModel(e.target.value)}
+                  />
+                )}
+              </div>
+              <button
+                className="btn ghost icon"
+                title="Fetch model list from provider"
+                onClick={runDiscovery}
+                disabled={discovering}
+              >
+                <Icon name="refresh" size={15} />
+              </button>
+            </div>
+          </Field>
+          {useCustomModel && discoveredModels.length > 0 && (
+            <button className="btn ghost self-start" onClick={() => setUseCustomModel(false)}>
+              Back to model list
+            </button>
           )}
 
           {testing && (
