@@ -70,7 +70,11 @@ def _resolve_provider_model_for_request(
         if "::" in requested_model:
             provider_id, model_id = requested_model.split("::", 1)
             return (provider_id or None, model_id or requested_model)
-        return (None, requested_model)
+        # No explicit provider prefix — reverse-lookup from cached model lists
+        from services.model_registry import find_provider_for_model
+
+        provider_id = find_provider_for_model(requested_model)
+        return (provider_id, requested_model)
 
     registry = get_registry()
     agent_override: Optional[str] = None
@@ -655,7 +659,11 @@ async def chat_stream(request: ChatRequest):
                         "searching detections, querying cases, and integrating "
                         "with external security platforms via MCP. Use tools "
                         "when the user asks you to look something up, enrich "
-                        "data, or take action. Be concise and precise."
+                        "data, or take action. Be concise and precise. "
+                        "IMPORTANT: Only state facts you can verify with tools. "
+                        "If you cannot answer from available context or tool "
+                        "results, say so. Never fabricate data, code, or "
+                        "detection content."
                     )
                     async for chunk in agent.stream(
                         provider=router_provider,
@@ -667,15 +675,17 @@ async def chat_stream(request: ChatRequest):
                     ):
                         yield f"data: {json.dumps(chunk)}\n\n"
                 else:
-                    from services.llm_router import LLMRouter
-
                     no_tools_prompt = (
-                        "You are Vigil, a concise SOC triage analyst. This "
-                        "model does not support tool calling. Analyze only the "
-                        "finding details and conversation context already "
-                        "present. If data is missing, say what is missing and "
-                        "recommend the next manual validation step."
+                        system_prompt
+                        or "You are Vigil, an AI SOC analyst. This model does "
+                        "not support tool calling. Answer ONLY from the "
+                        "conversation context provided. If data is missing, "
+                        "state exactly what is missing and recommend the "
+                        "specific manual step needed. Do NOT fabricate data, "
+                        "detections, code, or tool output. Keep responses "
+                        "under 200 words."
                     )
+                    from services.llm_router import LLMRouter
                     async for chunk in LLMRouter().dispatch_openai_stream(
                         provider=router_provider,
                         messages=messages,
@@ -848,11 +858,10 @@ async def websocket_chat(websocket: WebSocket):
 
 @router.get("/models")
 async def get_models():
-    """List available models.
+    """List available models for the chat model picker.
 
-    Backward-compatible alias for `/api/ai/models` (GH #89). Returns the
-    Anthropic subset so the existing Chat UI model picker continues to
-    show only Claude models even when Ollama/OpenAI providers are active.
+    Returns all models from active providers. If no models are discovered,
+    falls back to a static Anthropic list for first-run UX.
     """
     registry = get_registry()
     try:
@@ -861,10 +870,7 @@ async def get_models():
         logger.warning("get_models: registry lookup failed: %s", exc)
         all_models = []
 
-    anthropic_only = [m for m in all_models if m.provider_type == "anthropic"]
-    if not anthropic_only:
-        # Fallback — ensures the Chat UI still has something to render if the
-        # provider registry isn't reachable (e.g. fresh install, no DB).
+    if not all_models:
         return {
             "models": [
                 {
@@ -888,14 +894,18 @@ async def get_models():
     return {
         "models": [
             {
-                "id": m.model_id,
-                "name": m.display_name,
+                "id": f"{m.provider_id}::{m.model_id}",
+                "name": f"{m.display_name} ({m.provider_id})",
                 "description": (
-                    f"{m.context_window // 1000}K context, "
-                    f"${m.input_cost_per_1k:.4f}/1K in / ${m.output_cost_per_1k:.4f}/1K out"
+                    f"{m.context_window // 1000}K context"
+                    + (
+                        f", ${m.input_cost_per_1k:.4f}/1K in / ${m.output_cost_per_1k:.4f}/1K out"
+                        if m.input_cost_per_1k > 0
+                        else ""
+                    )
                 ),
             }
-            for m in anthropic_only
+            for m in all_models
         ]
     }
 

@@ -71,7 +71,7 @@ class IntegrationCompatibilityService:
                 "min_version": "0.7.17",
                 "display_name": "ServiceNow",
                 "category": "Incident Management",
-                "compatibility_note": "Conflicts with pandas 2.2.0+ (requires old pytz version). Incompatible with Python 3.13.",
+                "compatibility_note": "pysnow incompatible with Python 3.13. Use the ServiceNow MCP server instead (runs in isolated process).",
             },
             # Communications
             "slack": {
@@ -122,7 +122,7 @@ class IntegrationCompatibilityService:
                 "min_version": "1.23.0",
                 "display_name": "GCP Security Command Center",
                 "category": "Cloud Security",
-                "compatibility_note": "Not compatible with Python 3.13 (max Python 3.12)",
+                "compatibility_note": "Package requires Python <=3.12. Use the GCP Security MCP server instead (runs in isolated process).",
             },
             # Network Security
             "palo-alto": {
@@ -137,7 +137,7 @@ class IntegrationCompatibilityService:
                 "min_version": "1.16.0",
                 "display_name": "Tenable.io",
                 "category": "Vulnerability Management",
-                "compatibility_note": "Not compatible with Python 3.13 yet",
+                "compatibility_note": "Package requires Python <=3.12. Use the Tenable MCP server instead (runs in isolated process).",
             },
             # Data Storage
             "elasticsearch": {

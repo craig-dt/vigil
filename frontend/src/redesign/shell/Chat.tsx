@@ -299,13 +299,21 @@ export default function Chat({
     metaLoadedRef.current = true
     claudeApi
       .getModels()
-      .then((r) => setModels((r.data?.models || []) as { id: string; name: string }[]))
+      .then((r) => {
+        const fetched = (r.data?.models || []) as { id: string; name: string }[]
+        setModels(fetched)
+        // If no model is set yet and the model list has entries, pick the first
+        if (fetched.length && !settingsExistedRef.current && !userPickedModelRef.current) {
+          setModel((prev) => prev && fetched.some((m) => m.id === prev) ? prev : fetched[0].id)
+        }
+      })
       .catch(() => {})
     aiConfigApi
       .getConfig()
       .then((r) => {
-        const configured = r.data?.assignments?.chat_default?.model_id
-        if (configured && !settingsExistedRef.current && !userPickedModelRef.current) {
+        const a = r.data?.assignments?.chat_default
+        if (a && !settingsExistedRef.current && !userPickedModelRef.current) {
+          const configured = a.provider_id ? `${a.provider_id}::${a.model_id}` : a.model_id
           setModel(configured)
         }
       })
@@ -377,8 +385,8 @@ export default function Chat({
       }
       analyticsApi
         .estimateCost({
-          provider_type: 'anthropic',
-          model_id: model,
+          provider_type: model.includes('::') ? model.split('::')[0] : 'anthropic',
+          model_id: model.includes('::') ? model.split('::')[1] : model,
           messages: payloadMsgs,
           system_prompt: systemPrompt || undefined,
           max_tokens: maxTokens,

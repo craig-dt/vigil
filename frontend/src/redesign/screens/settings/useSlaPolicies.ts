@@ -81,7 +81,27 @@ export function useSlaPolicies() {
     [reload],
   )
   const setDefault = useCallback(
-    async (id: string) => { await slaPoliciesApi.setDefault(id); reload() },
+    async (id: string) => {
+      // Single-default-per-priority UI guard: picking a default instantly
+      // clears every sibling at the same priority_level so the table can never
+      // show two defaults for one priority (mirrors the backend invariant).
+      // Reload on failure to restore the authoritative state.
+      setPolicies((prev) => {
+        const target = prev.find((p) => p.policy_id === id)
+        if (!target) return prev
+        return prev.map((p) =>
+          p.priority_level === target.priority_level
+            ? { ...p, is_default: p.policy_id === id }
+            : p,
+        )
+      })
+      try {
+        await slaPoliciesApi.setDefault(id)
+      } catch (e) {
+        reload()
+        throw e
+      }
+    },
     [reload],
   )
 

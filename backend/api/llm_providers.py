@@ -336,8 +336,8 @@ async def set_default_provider(
     row = db.get(LLMProviderConfig, provider_id)
     if row is None:
         raise HTTPException(status_code=404, detail="provider not found")
-    row.is_default = True
     _clear_other_defaults(db, row.provider_type, provider_id)
+    row.is_default = True
     db.commit()
     db.refresh(row)
     return _to_response(row)

@@ -384,8 +384,11 @@ def _ollama_capabilities_from_show(
     # Also check if the architecture family matches
     if not supports_tools:
         for arch_family in families_in_info:
+            if arch_family in ("general", "tokenizer"):
+                continue
             for known in _OLLAMA_TOOL_CAPABLE_FAMILIES:
-                if arch_family.startswith(known.replace("-", "").replace(".", "")):
+                normalized = known.replace("-", "").replace(".", "")
+                if arch_family.startswith(normalized) or normalized.startswith(arch_family):
                     supports_tools = True
                     break
             if supports_tools:
@@ -456,36 +459,42 @@ async def fetch_ollama_models(
     if cached is not None:
         return cached
 
-    async def _list() -> List[str]:
+    async def _list() -> List[Dict[str, Any]]:
         async with httpx.AsyncClient(timeout=10.0, follow_redirects=False) as client:
             resp = await client.get(f"{base}/api/tags")
             resp.raise_for_status()
-            # ``resp.content`` is bytes on real httpx responses. Test
-            # fakes may omit it — gate the cap on attribute presence so
-            # unit tests using minimal stubs don't have to mock it.
             if len(getattr(resp, "content", b"") or b"") > _MAX_RESPONSE_BYTES:
                 raise RuntimeError("upstream response exceeded size cap")
             payload = resp.json()
-        return [m.get("name") for m in payload.get("models", []) if m.get("name")]
+        return [m for m in payload.get("models", []) if m.get("name")]
 
-    names = await _with_retry("ollama tags fetch", _list)
+    tag_entries = await _with_retry("ollama tags fetch", _list)
+    names = [m["name"] for m in tag_entries]
+    # Build a lookup for capabilities reported by /api/tags
+    tags_caps: Dict[str, List[str]] = {}
+    for entry in tag_entries:
+        tags_caps[entry["name"]] = entry.get("capabilities") or []
 
     async def _show(client: httpx.AsyncClient, name: str) -> ModelMeta:
         try:
             resp = await client.post(f"{base}/api/show", json={"name": name})
             resp.raise_for_status()
-            # ``resp.content`` is bytes on real httpx responses. Test
-            # fakes may omit it — gate the cap on attribute presence so
-            # unit tests using minimal stubs don't have to mock it.
             if len(getattr(resp, "content", b"") or b"") > _MAX_RESPONSE_BYTES:
                 raise RuntimeError("upstream response exceeded size cap")
             payload = resp.json()
             ctx = _ollama_context_from_show(payload)
             caps = _ollama_capabilities_from_show(name, payload)
+            # Override with /api/tags capabilities if more authoritative
+            model_caps = tags_caps.get(name, [])
+            if "tools" in model_caps:
+                caps["supports_tools"] = True
         except Exception as exc:  # noqa: BLE001
             logger.debug("ollama /api/show %s failed: %s", name, exc)
             ctx = 0
             caps = _ollama_capabilities_from_show(name, {})
+            model_caps = tags_caps.get(name, [])
+            if "tools" in model_caps:
+                caps["supports_tools"] = True
         return ModelMeta(
             id=name, display_name=name,
             context_window=ctx, capabilities=caps,

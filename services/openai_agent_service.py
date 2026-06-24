@@ -353,6 +353,31 @@ class OpenAIAgentService:
 
             # No tool calls → done
             if finish_reason != "tool_calls" or not tool_calls_buffer:
+                # Detect malformed tool calls dumped as text (common with
+                # smaller models that attempt tool use but fail at structured
+                # output). Filter it rather than passing hallucinated JSON.
+                if (
+                    text_buffer
+                    and iteration == 0
+                    and (
+                        '{"type":"function"' in text_buffer
+                        or ('"function"' in text_buffer and '"parameters"' in text_buffer)
+                    )
+                ):
+                    logger.warning(
+                        "Model output contains raw tool-call JSON in text "
+                        "(model may not support structured tool calling)"
+                    )
+                    yield {
+                        "type": "text",
+                        "content": (
+                            "I attempted to use tools but this model doesn't "
+                            "reliably support structured tool calling. Please "
+                            "select a more capable model in Settings > AI Config "
+                            "(e.g., sec8-tools, gpt-4o, or any 7B+ model with "
+                            "tool support)."
+                        ),
+                    }
                 break
 
             # Build assistant message with tool_calls

@@ -129,11 +129,12 @@ function ProvidersPanel({ notify }: SectionProps) {
         </div>
       )}
       {phase === 'ready' && (
+        <>
         <div className="table-wrap">
           <table className="tbl">
             <thead>
               <tr>
-                <th>Name</th><th>Type</th><th>Model</th><th>Status</th><th>Default</th>
+                <th>Name</th><th>Type</th><th>Model</th><th>Status</th><th>Primary</th>
                 <th style={{ textAlign: 'right' }}>Actions</th>
               </tr>
             </thead>
@@ -155,8 +156,9 @@ function ProvidersPanel({ notify }: SectionProps) {
                   <td>
                     <button
                       className="btn ghost icon"
-                      title={p.is_default ? 'Default for this provider type' : 'Set as default'}
-                      onClick={() => !p.is_default && handleSetDefault(p.provider_id)}
+                      title={p.is_default ? 'Already primary for this type' : 'Set as primary for this type'}
+                      onClick={() => handleSetDefault(p.provider_id)}
+                      disabled={p.is_default}
                       style={p.is_default ? { color: 'var(--accent-2)' } : undefined}
                     >
                       <Icon name={p.is_default ? 'sparkle' : 'plus'} size={15} />
@@ -180,6 +182,10 @@ function ProvidersPanel({ notify }: SectionProps) {
             </tbody>
           </table>
         </div>
+        <div className="text-xs text-tx-3 mt-2" style={{ maxWidth: 560 }}>
+          Primary selects which provider handles traffic for its type when multiple exist. To change which model the agent uses, switch to the <strong>Model Assignment</strong> tab.
+        </div>
+        </>
       )}
 
       {dialogOpen && (

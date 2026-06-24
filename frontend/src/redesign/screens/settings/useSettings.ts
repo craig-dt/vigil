@@ -593,7 +593,27 @@ export function useLlmProviders() {
   const test = useCallback((id: string) => llmProviderApi.test(id).then((r) => r.data), [])
   const remove = useCallback((id: string) => llmProviderApi.remove(id).then(() => reload()), [reload])
   const setDefault = useCallback(
-    (id: string) => llmProviderApi.setDefault(id).then(() => reload()),
+    async (id: string) => {
+      // Single-default-per-type UI guard: picking a default instantly clears
+      // every sibling of the same provider_type so the table can never show
+      // two defaults for one type (mirrors the backend's _clear_other_defaults
+      // invariant). Reload on failure to restore the authoritative state.
+      setProviders((prev) => {
+        const target = prev.find((p) => p.provider_id === id)
+        if (!target) return prev
+        return prev.map((p) =>
+          p.provider_type === target.provider_type
+            ? { ...p, is_default: p.provider_id === id }
+            : p,
+        )
+      })
+      try {
+        await llmProviderApi.setDefault(id)
+      } catch (e) {
+        reload()
+        throw e
+      }
+    },
     [reload],
   )
 

@@ -801,15 +801,16 @@ async def shutdown_event():
 
     logger.info("Shutting down MCP connections...")
     try:
+        import asyncio
+
         from services.mcp_client import get_mcp_client
 
         mcp_client = get_mcp_client()
         if mcp_client:
-            # Close all MCP sessions — stdio child processes are owned by
-            # the MCP SDK's stdio_client contexts, which shut down as the
-            # persistent sessions close. No separate Popen pool to tear
-            # down since the legacy start_server path was removed (#125).
-            await mcp_client.close_all()
+            try:
+                await asyncio.wait_for(mcp_client.close_all(), timeout=5.0)
+            except (asyncio.TimeoutError, asyncio.CancelledError):
+                logger.warning("MCP shutdown timed out — force-killing sessions")
             logger.info("All MCP connections closed")
     except Exception as e:
         logger.error(f"Error during shutdown cleanup: {e}")

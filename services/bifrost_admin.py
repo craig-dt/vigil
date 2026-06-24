@@ -53,12 +53,41 @@ def _get_provider(name: str, client: httpx.Client) -> Optional[Dict[str, Any]]:
         return None
 
 
+def _get_provider_keys(
+    provider_name: str, client: httpx.Client
+) -> Optional[List[Dict[str, Any]]]:
+    """Fetch keys for a provider via the admin keys endpoint."""
+    try:
+        r = client.get(
+            f"{_bifrost_base_url()}/api/providers/{provider_name}/keys",
+            timeout=_DEFAULT_TIMEOUT,
+        )
+        if r.status_code == 404:
+            return None
+        r.raise_for_status()
+        data = r.json()
+        return data.get("keys") or []
+    except Exception as e:
+        logger.warning(
+            "Bifrost: could not fetch keys for %s: %s", provider_name, e
+        )
+        return None
+
+
+def _build_fallback_key(provider_name: str) -> Dict[str, Any]:
+    """Construct a minimal Bifrost key slot for creation."""
+    key: Dict[str, Any] = {"name": f"vigil-{provider_name}-key", "weight": 1}
+    if provider_name == "ollama":
+        url = os.getenv("OLLAMA_URL", "http://host.docker.internal:11434")
+        key["ollama_key_config"] = {"url": url}
+    return key
+
+
 def push_provider_key(provider_name: str, key_value: str) -> bool:
     """Update the first configured key on ``provider_name`` with ``key_value``.
 
-    We take the current provider document, replace the key value with a
-    literal (``from_env: false``), and PUT it back. This is idempotent —
-    pushing the same value twice is a no-op from Anthropic's perspective.
+    Uses Bifrost's key-level API: GET keys list, then PUT the specific key
+    by ID. Falls back to provider-level PUT if no keys exist yet.
 
     Returns True on success. Any failure is logged and returns False so
     the caller's CRUD flow never breaks on a Bifrost hiccup.
@@ -66,32 +95,39 @@ def push_provider_key(provider_name: str, key_value: str) -> bool:
     if not provider_name:
         return False
     with httpx.Client() as client:
-        prov = _get_provider(provider_name, client)
-        if prov is None:
+        keys = _get_provider_keys(provider_name, client)
+        if keys is None:
             return False
-        keys = prov.get("keys") or []
-        if not keys:
-            logger.warning(
-                "Bifrost: provider %s has no keys slot to update", provider_name
+
+        value_payload = {"value": key_value, "env_var": "", "from_env": False}
+
+        if keys:
+            key_obj = keys[0]
+            key_id = key_obj.get("id")
+            key_obj["value"] = value_payload
+            # Remove read-only fields Bifrost may reject on write
+            for field in ("config_hash", "status", "enabled"):
+                key_obj.pop(field, None)
+            url = (
+                f"{_bifrost_base_url()}/api/providers/{provider_name}/keys/{key_id}"
             )
-            return False
-        # Update the first key. Bifrost's current config seeds exactly one
-        # key per provider; multi-key rotation is a separate feature.
-        keys[0]["value"] = {
-            "value": key_value,
-            "env_var": "",
-            "from_env": False,
-        }
+        else:
+            # No keys exist — create via provider-level PUT
+            prov = _get_provider(provider_name, client)
+            if prov is None:
+                return False
+            key_obj = _build_fallback_key(provider_name)
+            key_obj["value"] = value_payload
+            prov["keys"] = [key_obj]
+            url = f"{_bifrost_base_url()}/api/providers/{provider_name}"
+            key_obj = prov  # PUT the whole provider
+
         try:
-            r = client.put(
-                f"{_bifrost_base_url()}/api/providers/{provider_name}",
-                json=prov,
-                timeout=_DEFAULT_TIMEOUT,
-            )
+            r = client.put(url, json=key_obj, timeout=_DEFAULT_TIMEOUT)
             if r.status_code >= 400:
                 logger.warning(
-                    "Bifrost: PUT /api/providers/%s returned %s: %s",
-                    provider_name,
+                    "Bifrost: PUT %s returned %s: %s",
+                    url,
                     r.status_code,
                     r.text[:200],
                 )
@@ -100,7 +136,7 @@ def push_provider_key(provider_name: str, key_value: str) -> bool:
             return True
         except Exception as e:
             logger.warning(
-                "Bifrost: PUT /api/providers/%s failed: %s", provider_name, e
+                "Bifrost: PUT %s failed: %s", url, e
             )
             return False
 
@@ -177,27 +213,36 @@ def sync_provider_models(provider_type: str, model_ids: list[str]) -> bool:
         normalized.append(mid)
 
     with httpx.Client() as client:
-        prov = _get_provider(provider_type, client)
-        if prov is None:
+        keys = _get_provider_keys(provider_type, client)
+        if keys is None:
             return False
-        keys = prov.get("keys") or []
-        if not keys:
-            logger.warning(
-                "Bifrost: provider %s has no keys slot to update",
-                provider_type,
+
+        if keys:
+            key_obj = keys[0]
+            key_id = key_obj.get("id")
+            key_obj["models"] = normalized
+            for field in ("config_hash", "status", "enabled"):
+                key_obj.pop(field, None)
+            url = (
+                f"{_bifrost_base_url()}/api/providers/{provider_type}/keys/{key_id}"
             )
-            return False
-        keys[0]["models"] = normalized
+            payload = key_obj
+        else:
+            prov = _get_provider(provider_type, client)
+            if prov is None:
+                return False
+            fallback = _build_fallback_key(provider_type)
+            fallback["models"] = normalized
+            prov["keys"] = [fallback]
+            url = f"{_bifrost_base_url()}/api/providers/{provider_type}"
+            payload = prov
+
         try:
-            r = client.put(
-                f"{_bifrost_base_url()}/api/providers/{provider_type}",
-                json=prov,
-                timeout=_DEFAULT_TIMEOUT,
-            )
+            r = client.put(url, json=payload, timeout=_DEFAULT_TIMEOUT)
             if r.status_code >= 400:
                 logger.warning(
-                    "Bifrost: PUT /api/providers/%s (models) returned %s: %s",
-                    provider_type,
+                    "Bifrost: PUT %s (models) returned %s: %s",
+                    url,
                     r.status_code,
                     r.text[:200],
                 )
@@ -210,9 +255,7 @@ def sync_provider_models(provider_type: str, model_ids: list[str]) -> bool:
             return True
         except Exception as e:
             logger.warning(
-                "Bifrost: PUT /api/providers/%s (models) failed: %s",
-                provider_type,
-                e,
+                "Bifrost: PUT %s (models) failed: %s", url, e
             )
             return False
 
