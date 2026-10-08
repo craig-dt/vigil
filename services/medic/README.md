@@ -27,6 +27,13 @@ dev-mode set in `rules/dev/` (no pack loader yet, F6).
 | `VIGIL_MEDIC_DATA_DIR` | `/var/lib/vigil-medic` (macOS: `/Library/Application Support/vigil-medic`) |
 | `VIGIL_MEDIC_INSTALL_SHAPE` | `compose` (`start_sh`, `compose` or `helm`) |
 | `VIGIL_MEDIC_AGENT_WORKER_ADDR` | `agent-worker:6990` (`start_sh`: `127.0.0.1:6990`); `host:port` only |
+| `VIGIL_MEDIC_POLICY_PROBE_ADDR` | Helm only, and required there (the chart sets it): a `host:port` Medic's NetworkPolicy must block |
+| `VIGIL_MEDIC_POLICY_CONTROL_ADDR` | Helm only, and required there: a `host:port` on the same pods that the policy allows |
+
+On Helm, `run` first connects to the control (retried for up to a minute while
+it starts), then tries the probe target once. Only "control connected, target
+dropped" proves NetworkPolicy is enforced; anything else, and Medic logs why
+and exits **3** before opening its store (A3-3).
 
 Data directory: `medic.db` (+ `-wal`, `-shm`), `medic.lock`, `instance_id`,
 `run/heartbeat`, `run/engine-state.json`. `python -m services.medic.store verify`
