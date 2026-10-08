@@ -12,4 +12,5 @@ entries:
     why: Each dropped finding is a symptom of the processor having no database.
   - parent: {rule: ingest.federation-integration-disabled}
     children: {rule: ingest.federation-source-stalled}
+    match: [source]
     why: A source whose integration is off is skipped, so its last success stalls with no error. Show the configuration fault.
