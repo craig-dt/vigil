@@ -33,11 +33,13 @@ class Stub:
     def __init__(self) -> None:
         self.ready = True
         self.hits = 0
+        self.paths: list[str] = []
         stub = self
 
         class Handler(BaseHTTPRequestHandler):
             def do_GET(self) -> None:
                 stub.hits += 1
+                stub.paths.append(self.path)
                 body = b"ready" if stub.ready else f"not ready {CANARY}".encode()
                 self.send_response(200 if stub.ready else 503)
                 self.send_header("Content-Type", "text/plain")
@@ -101,12 +103,15 @@ def _sleeper(
     return sleep
 
 
-def _env(data_dir: Path, stub: Stub) -> dict[str, str]:
+def _env(data_dir: Path, stub: Stub, serve: Stub | None = None) -> dict[str, str]:
     return {
         "VIGIL_MEDIC_ENABLED": "true",
         "VIGIL_MEDIC_DATA_DIR": str(data_dir),
         "VIGIL_MEDIC_INSTALL_SHAPE": "compose",
         "VIGIL_MEDIC_AGENT_WORKER_ADDR": stub.addr,
+        # On Compose agent-serve is read too (S10); one stub plays both unless
+        # the test gives serve its own.
+        "VIGIL_MEDIC_AGENT_SERVE_ADDR": (serve or stub).addr,
     }
 
 
@@ -117,10 +122,12 @@ def _outage(stub: Stub, down_from: float, up_at: float) -> Callable[[float], Non
     return script
 
 
-def _run(data_dir: Path, stub: Stub, clock: FakeClock, script, cycles: int) -> int:
+def _run(
+    data_dir: Path, stub: Stub, clock: FakeClock, script, cycles: int, serve=None
+) -> int:
     return main(
         ["run"],
-        env=_env(data_dir, stub),
+        env=_env(data_dir, stub, serve),
         clock=clock,
         sleep=_sleeper(clock, script),
         max_cycles=cycles,
@@ -137,7 +144,12 @@ def test_readyz_failure_opens_after_the_hold_and_resolves_after_recovery(
     clock = FakeClock()
     t0 = clock.wall()
     down_from, up_at = 60, 420
-    assert _run(tmp_path, stub, clock, _outage(stub, down_from, up_at), 60) == 0
+    serve = Stub()
+    try:
+        script = _outage(stub, down_from, up_at)
+        assert _run(tmp_path, stub, clock, script, 60, serve=serve) == 0
+    finally:
+        serve.close()
 
     by_type = {r["type"]: r for r in _incident_records(tmp_path)}
     opened = by_type["incident_opened"]
@@ -160,6 +172,11 @@ def test_readyz_failure_opens_after_the_hold_and_resolves_after_recovery(
     assert resolved["body"]["how"] == "cleared"
     assert offset(resolved["at"]) >= up_at + 300
     assert len([r for r in stored(tmp_path) if r["type"] == "incident_opened"]) == 1
+    # `route` is written once, by the engine (S4b2-2): routed at open, no update.
+    assert opened["body"]["route"] == "routed"
+    assert not [r for r in stored(tmp_path) if r["body"].get("change") == "routed"]
+    # agent-serve was probed too; it has no rule, so it adds no incident.
+    assert set(serve.paths) == {"/readyz"} and serve.hits >= 10
 
     report = verify_store(tmp_path)
     assert report.ok and report.count == len(stored(tmp_path))
