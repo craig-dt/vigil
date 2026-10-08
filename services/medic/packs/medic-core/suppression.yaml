@@ -1,9 +1,9 @@
-# Dependency suppression (E3 §6): while a parent incident is open, a child incident
-# is recorded but not routed. Each batch adds the entries whose parent it owns.
+# Dependency suppression (E3 §6). Entries are grouped by the class that owns the
+# child; keep each batch's entries under its heading when merging.
 apiVersion: medic.suppression/v1
 kind: Suppression
 entries:
-  # LLM path (F7 batch 2) ------------------------------------------------------
+  # --- pipeline (children; parents from the llm rules, added by F7b) ---
   - parent: {class: llm}
     children: {mode: P-4}
     why: Triage stalls whenever the LLM path is down (B5 P-4.a). Show the LLM fault, not the stall.
