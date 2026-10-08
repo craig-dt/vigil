@@ -5,8 +5,11 @@ kind: Suppression
 entries:
   # --- ingest (F7a) ---
   - parent: {rule: ingest.processor-without-database}
-    children: {rule: ingest.source-silent}
-    why: A daemon processor with no database stores nothing, so every source looks silent. Show the database fault.
-  - parent: {rule: ingest.integration-config-incomplete}
-    children: {rule: ingest.federation-integration-disabled}
-    why: A half-configured integration also reads as not configured on its federation row. Show the missing settings.
+    children: {rule: ingest.source-polls-failing}
+    why: With no database every finding is dropped and federation records each tick as a failure. Show the database fault, not a credential fault per source.
+  - parent: {rule: ingest.processor-without-database}
+    children: {rule: ingest.processor-store-dropped}
+    why: Each dropped finding is a symptom of the processor having no database.
+  - parent: {rule: ingest.federation-integration-disabled}
+    children: {rule: ingest.federation-source-stalled}
+    why: A source whose integration is off is skipped, so its last success stalls with no error. Show the configuration fault.
