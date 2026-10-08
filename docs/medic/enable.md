@@ -4,7 +4,7 @@ Medic (the System Watcher) watches this install's own health. It changes nothing
 
 `VIGIL_MEDIC_ENABLED` is the master switch everywhere (Helm: `medic.enabled`). Medic exits at start when the switch is false. The backend reads the same switch, so the console shows a Medic you turned off as **Off**, not **Down**. Only `true`, `1`, `yes` or `on` turn it on. Anything else counts as off.
 
-With the switch on, one backend process asks Medic for its status once a minute, through the gateway, with the API key, and keeps the answer in Postgres. The console's status is **Running** while Medic answers, and **Down** once it has failed to answer for 5 minutes. A short backend restart keeps it. After 3 minutes or more with nothing polling (the backend down, or Medic switched off), the status starts over: **Unknown** until the next answer, or **Down** about 4 minutes later if Medic still doesn't answer.
+With the switch on, one backend process asks Medic for its status once a minute, through the gateway, with the API key, and keeps the answer in Postgres. The console's status is **Running** while Medic answers, and **Down** once it has failed to answer for 270 seconds (4½ minutes), so a stopped Medic shows Down inside 5 minutes. A short backend restart keeps it. After 3 minutes or more with nothing polling (the backend down, or Medic switched off), the status starts over: **Unknown** until the next answer, or **Down** about 3½ minutes later if Medic still doesn't answer.
 
 On Compose and Helm, Medic reads the backend only through its own read-only gateway. The gateway logs in as a **service account**:
 
@@ -32,6 +32,8 @@ The script is the whole enable, and it is safe to re-run. It:
 
 It never prints a secret. It refuses to run if recreating the backend would leave it without a `JWT_SECRET_KEY`.
 
+On Linux the script also hands each file to whoever reads it, since Compose bind-mounts secret files as they are: the password to the gateway (uid 10002), and the API key to `root:10010`, mode `0640`. Group 10010 belongs to Medic and the backend only (`group_add`), so the key isn't readable through gid 1000, which on Linux is often a person's own group. The gateway passes the key through without reading the file.
+
 After the script, `./start.sh` (through `scripts/lib.sh`'s `dc`) and the console's service controls add Medic's overlay and settings themselves whenever `compose.env` exists, so a restart through them keeps Medic on its network. A `docker compose` command you type yourself needs them too. The script prints the exact command:
 
 ```bash
@@ -48,7 +50,9 @@ To turn Medic off, delete `compose.env` (that file is what makes `start.sh` and 
 
 ## Helm (PROVISIONAL)
 
-These steps need the chart's Medic templates (the Medic and gateway Deployments, step S7). Without them, `medic.enabled=true` only sets the backend's switch, and there is no gateway yet to use the account.
+The chart needs a cluster whose network plugin **enforces NetworkPolicy** (Calico, Cilium, kind's default kindnet, or a managed cluster with enforcement on). Medic checks at start and refuses to run (exit 3) where nothing enforces it, e.g. flannel. Plugins set to reject denied traffic rather than drop it are fine.
+
+The chart mints Medic's API key at install into the Secret `<release>-medic-api-key` and keeps it across upgrades; Medic and the backend mount it as a file. The backend polls `http://<release>-medic-gateway-in:8470` once a minute and shows **Down** after 270 seconds without an answer. Where Helm can't read the cluster when it renders (`helm template`, Argo CD, Flux), create the Secret yourself (key `api_key`, 32 random bytes base64url) and set `medic.apiKey.existingSecret`; otherwise every render mints a new key. For the same reason `helm diff` and a client-side `helm upgrade --dry-run` always show the key as changed; a real `helm upgrade` keeps it.
 
 1. Before you install or upgrade, create the gateway's password Secret and choose the name. The password is written to a file and never appears on a command line.
 

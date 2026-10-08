@@ -17,9 +17,11 @@
 # 4. Starts (or recreates) the backend with the flag on, then creates the
 #    Viewer service account inside it: `python -m core.auth.service_account`,
 #    the password on stdin, never on a command line. Lockout-exempt, Viewer only.
-# 5. On Linux, hands each secret file to the uid that reads it (10002 gateway,
-#    10001 Medic). Compose ignores uid/mode on file secrets and bind-mounts them
-#    as they are; Docker Desktop's file sharing needs no change.
+# 5. On Linux, hands each secret file to whoever reads it: viewer_password to
+#    the gateway (10002); api_key to root:10010 0640, the group Medic and the
+#    backend join with `group_add` (S6-3). Compose ignores uid/mode on file
+#    secrets and bind-mounts them as they are; Docker Desktop's file sharing
+#    needs no change.
 # 6. Starts Medic, its gateway and Docker proxy, and recreates the running Vigil
 #    services the overlay puts on medic-net.
 #
@@ -40,6 +42,9 @@
 # --env-file .env` (README; VIGIL_MEDIC_DOTENV names another file); variables
 # already in the environment win over it, and Medic's compose.env over both.
 set -euo pipefail
+
+# The group that reads api_key: Medic and the backend `group_add` it (S6-3 / V2-7).
+MEDIC_KEY_GID=10010
 
 usage() {
     echo "usage: $0 [--secrets-only] [--rotate]" >&2
@@ -297,20 +302,14 @@ if [ "$secrets_only" = 0 ]; then
         exit 1
     fi
     dcm build medic medic-gateway medic-dockerproxy
-    # The backend polls Medic with api_key (V2). Compose bind-mounts the file, so
-    # a new one reaches a running backend only on a recreate.
-    if [ "$api_outcome" = created ] || [ -e "$dir/.recreate" ]; then
-        dcm up -d --force-recreate backend
-    fi
-    # db-seed seeds the Viewer role; only a full `up` would start it otherwise.
-    dcm up -d backend db-seed
-    ensure_account
+    # Before anything starts that reads them: each file to its reader (step 5).
     if [ "$(uname -s)" = Linux ]; then
-        # api_key: Medic (uid 10001) owns it; the backend (gid 1000) polls with it.
-        own="chown 10002:10002 /s/viewer_password && chown 10001:1000 /s/api_key && chmod 0640 /s/api_key"
+        # api_key: read by Medic and the backend through their shared group,
+        # never gid 1000, which on Linux is often a person's own group.
+        own="chown 10002:10002 /s/viewer_password && chown 0:$MEDIC_KEY_GID /s/api_key && chmod 0640 /s/api_key"
         if [ "$(id -u)" = 0 ]; then
             chown 10002:10002 "$dir/viewer_password"
-            chown 10001:1000 "$dir/api_key"
+            chown "0:$MEDIC_KEY_GID" "$dir/api_key"
             chmod 0640 "$dir/api_key"
         else
             # Anyone who can run this can already drive Docker as root; this just
@@ -319,6 +318,14 @@ if [ "$secrets_only" = 0 ]; then
                 --entrypoint sh vigil-medic-gateway:local -c "$own"
         fi
     fi
+    # The backend polls Medic with api_key (V2). Compose bind-mounts the file, so
+    # a new one reaches a running backend only on a recreate.
+    if [ "$api_outcome" = created ] || [ -e "$dir/.recreate" ]; then
+        dcm up -d --force-recreate backend
+    fi
+    # db-seed seeds the Viewer role; only a full `up` would start it otherwise.
+    dcm up -d backend db-seed
+    ensure_account
     if [ "$viewer_outcome" = created ] || [ "$api_outcome" = created ] \
         || [ -e "$dir/.recreate" ]; then
         # A new file (--rotate, or one deleted and re-minted): Compose
