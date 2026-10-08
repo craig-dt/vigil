@@ -14,3 +14,7 @@ entries:
     children: {rule: ingest.federation-source-stalled}
     match: [source]
     why: A source whose integration is off is skipped, so its last success stalls with no error. Show the configuration fault.
+  # --- pipeline (F7c) ---
+  - parent: {rule: pipeline.agent-serve-not-ready}
+    children: {rule: pipeline.agent-reads-failing}
+    why: With agent-serve down every projection read fails; show agent-serve.
