@@ -30,7 +30,7 @@ entries:
   - parent: {rule: llm.gateway-unreachable}
     children: {rule: llm.calls-failing}
     why: With Bifrost unreachable every call fails. Show the gateway, not the generic failure count.
-  # --- pipeline (children; parents from the llm rules, added by F7b) ---
+  # --- pipeline (F7b: children of llm parents; F7c) ---
   - parent: {class: llm}
     children: {mode: P-4}
     why: Triage stalls whenever the LLM path is down (B5 P-4.a). Show the LLM fault, not the stall.
@@ -40,3 +40,6 @@ entries:
   - parent: {mode: L-3}
     children: {cause: P-2.e}
     why: LLM jobs with no consumer stall runs (B5 P-2.e).
+  - parent: {rule: pipeline.agent-serve-not-ready}
+    children: {rule: pipeline.agent-reads-failing}
+    why: With agent-serve down every projection read fails; show agent-serve.
