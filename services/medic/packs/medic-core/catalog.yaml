@@ -26,5 +26,13 @@ entries:
   # core/integrations/splunk/adapter.py:132, services/daemon/poller.py:406
   - {logger: core.integrations.splunk.adapter, template: 'Splunk query failed (%s): %s'}
   - {logger: services.daemon.poller, template: 'Splunk query failed (%s): %s'}
+  # core/federation/adapters/_siem_base.py:154
+  - {logger: core.federation.adapters._siem_base, template: '%s dropped %d of %d alert(s) that failed to transform%s'}
+  # core/federation/adapters/_base.py:88
+  - {logger: core.federation.adapters._base, template: "Federation %s: newest alert time %s is ahead of this host's clock (window end %s); capping the cursor there"}
   # core/ingestion/kafka_consumer_service.py:115
   - {logger: core.ingestion.kafka_consumer_service, template: 'Kafka consumer failed to start: %s'}
+  # services/daemon/processor.py:168 (constant text; the failure line beside it is an f-string)
+  - {logger: services.daemon.processor, template: 'Database service initialized'}
+  # services/daemon/processor.py:494
+  - {logger: services.daemon.processor, template: 'Dropped finding %s: database store failed'}

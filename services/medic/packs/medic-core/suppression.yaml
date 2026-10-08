@@ -4,6 +4,9 @@ apiVersion: medic.suppression/v1
 kind: Suppression
 entries:
   # --- ingest (F7a) ---
+  - parent: {rule: ingest.processor-without-database}
+    children: {rule: ingest.source-silent}
+    why: A daemon processor with no database stores nothing, so every source looks silent. Show the database fault.
   - parent: {rule: ingest.integration-config-incomplete}
     children: {rule: ingest.federation-integration-disabled}
     why: A half-configured integration also reads as not configured on its federation row. Show the missing settings.
