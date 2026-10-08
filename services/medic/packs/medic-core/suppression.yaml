@@ -15,6 +15,21 @@ entries:
     match: [source]
     why: A source whose integration is off is skipped, so its last success stalls with no error. Show the configuration fault.
   # --- pipeline (F7c) ---
+  - parent: {class: llm}
+    children: {mode: P-4}
+    why: B5 pair. Triage stalls and processor errors follow an LLM-path fault; show the LLM fault.
+  - parent: {mode: L-5}
+    children: {rule: pipeline.orchestrator-slots-held}
+    why: A spend cap or exhausted budget holds new runs too; show the budget fault.
   - parent: {rule: pipeline.agent-serve-not-ready}
     children: {rule: pipeline.agent-reads-failing}
     why: With agent-serve down every projection read fails; show agent-serve.
+  - parent: {rule: pipeline.agent-serve-not-ready}
+    children: {rule: pipeline.runs-stale}
+    why: Run progress comes from agent-serve's projections; with it down every run looks stale.
+  - parent: {rule: pipeline.agent-worker-not-ready}
+    children: {rule: pipeline.runs-stale}
+    why: Runs queued while the worker isn't ready are never picked up; show the worker.
+  - parent: {rule: pipeline.agent-reads-failing}
+    children: {rule: pipeline.runs-stale}
+    why: Runs whose progress can't be read never record activity; show the read fault.
