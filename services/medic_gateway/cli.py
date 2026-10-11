@@ -44,7 +44,7 @@ class Config:
     context_path: str
 
 
-WILDCARDS = ("", "*", "0.0.0.0", "::", "[::]")
+WILDCARDS = ("", "*", "0.0.0.0", "::", "[::]")  # nosec B104 - hosts we refuse
 
 
 def _hostport(env: Mapping[str, str], name: str) -> tuple[str, int]:
