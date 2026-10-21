@@ -119,3 +119,10 @@ def test_only_a_true_flag_exempts(monkeypatch, wrong_password, flag):
 
     with pytest.raises(AccountLockedError):
         _attempt(monkeypatch, user, 10)
+
+
+def test_a_user_without_the_flag_is_not_exempt() -> None:
+    """Fails closed when the attribute is absent (stand-ins, older rows)."""
+    from types import SimpleNamespace
+
+    assert auth_module._is_service_account(SimpleNamespace(username="victim")) is False

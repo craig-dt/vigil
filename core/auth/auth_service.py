@@ -80,7 +80,7 @@ PASSWORD_HISTORY_LIMIT = get_settings().auth_password_history_limit
 
 def _is_service_account(user: User) -> bool:
     """Only an explicit True exempts from lockout; anything else fails closed."""
-    return user.service_account is True
+    return getattr(user, "service_account", False) is True
 
 
 class AccountLockedError(Exception):
