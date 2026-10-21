@@ -1,4 +1,6 @@
 # Test-only override for tests/medic_compose/test_compose_live.py. Never for installs.
+# Not named compose*.yml: it builds nothing (every build is reset), and the
+# compose ratchets read files with yaml.safe_load, which can't parse Compose's !reset.
 #
 # Applied on top of infra/docker/docker-compose.yml + the Medic overlay, under its
 # own project name (medic-s6 by default), so it can run beside a developer's

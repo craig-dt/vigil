@@ -6,7 +6,7 @@ Opt-in (it builds three images and runs a stack for ~5 minutes):
 
 It runs `scripts/medic/enable-compose.sh` for real (secrets, image build, file
 ownership), then brings up the real Compose files plus the Medic overlay plus
-`compose.test.yml` under its own project (`medic-s6`, or
+`live-stack.overlay.yml` under its own project (`medic-s6`, or
 VIGIL_MEDIC_COMPOSE_PROJECT). Backend, agents, daemon, Redis, Postgres and
 Bifrost are stubs on their real networks and ports; the Medic services are the
 real images. Every probe runs from inside the Medic container. The project is
@@ -79,7 +79,7 @@ class Stack:
         if not self.env["VIGIL_MEDIC_DOCKER_GID"]:
             del self.env["VIGIL_MEDIC_DOCKER_GID"]
         self.base = [
-            *compose_cmd("medic", "daemon", files=(HERE / "compose.test.yml",)),
+            *compose_cmd("medic", "daemon", files=(HERE / "live-stack.overlay.yml",)),
             "-p",
             PROJECT,
         ]
@@ -185,7 +185,7 @@ def probe(healthy):
         )[0]["IPAM"]["Config"]
         if cfg.get("Gateway")
     ]
-    # compose.test.yml publishes the backend stub on 0.0.0.0, a random port, as
+    # live-stack.overlay.yml publishes the backend stub on 0.0.0.0, a random port, as
     # the real backend publishes 6987.
     published = int(
         s.compose("port", "backend", "6987").stdout.strip().rsplit(":", 1)[1]
