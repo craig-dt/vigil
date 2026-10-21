@@ -59,6 +59,16 @@ def raw_docker(path: str) -> bytes:
     return buf
 
 
+def api_version() -> str:
+    """The engine's own API version: a pinned one fails on an older engine (400)."""
+    head = raw_docker("/_ping").split(b"\r\n\r\n", 1)[0].decode()
+    for line in head.split("\r\n"):
+        name, _, value = line.partition(":")
+        if name.lower() == "api-version":
+            return value.strip()
+    raise AssertionError(f"no Api-Version header from /_ping: {head!r}")
+
+
 @pytest.fixture(scope="module")
 def live():
     subprocess.run(["docker", "rm", "-f", NAME], capture_output=True, check=False)
@@ -109,12 +119,12 @@ def body(resp: bytes) -> bytes:
     [
         "/_ping",
         "/containers/json",
-        "/v1.54/containers/json",
+        "/v{api}/containers/json",
         "/containers/json?all=1&filters=%7B%7D",
     ],
 )
 def test_allowed_reads(live, t):
-    assert get(live, t)[0] == 200
+    assert get(live, t.replace("{api}", api_version()))[0] == 200
 
 
 def test_list_with_encoded_label_filter(live):
@@ -155,7 +165,9 @@ def test_logs_non_follow(live):
 
 def test_events_type_forced_to_container(live):
     now = int(time.time())
-    window = f"since={now - 600}&until={now}"
+    # `until` is whole seconds and leaves out its own second, where the
+    # fixture's events land when the suite runs fast (as on CI): end one later.
+    window = f"since={now - 600}&until={now + 1}"
     # Negative control: the fixture's `docker run` raised network events.
     assert b'"Type":"network"' in raw_docker(f"/events?{window}")
     st, resp = get(live, f"/events?{window}")
